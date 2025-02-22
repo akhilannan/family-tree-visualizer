@@ -1,0 +1,9 @@
+# Generated files
+family_video.mp4
+slides/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/

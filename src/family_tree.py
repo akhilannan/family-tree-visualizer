@@ -1,0 +1,329 @@
+import json
+import os
+import shutil
+from PIL import Image, ImageDraw, ImageFont
+from moviepy import ImageSequenceClip, AudioFileClip
+
+# Configuration
+CONFIG_PATH = 'data/family.json'
+MUSIC_PATH = 'assets/audio/background.mp3'
+OUTPUT_PATH = 'family_video.mp4'
+CANVAS_WIDTH = 1200
+CANVAS_HEIGHT = 1600
+HEADER_Y = 50
+LEVEL_HEIGHT = 270
+SPACER = 20
+GROUP_PIC_SIZE = (800, 450)
+LABEL_FONT_SIZE = 24
+LINE_SPACING = 40
+
+# Image paths
+PROFILE_IMAGES_PATH = 'assets/images/profiles'
+FAMILY_IMAGES_PATH = 'assets/images/families'
+DEFAULT_IMAGES_PATH = 'assets/images/defaults'
+
+def preprocess_config(config):
+    """
+    Preprocess the configuration to ensure spouse gender is set appropriately.
+    """
+    def process_node(node):
+        if 'spouse' in node and node['spouse']:
+            spouse = node['spouse']
+            if not spouse.get('gender'):
+                spouse['gender'] = 'female' if node.get('gender', '').lower() == 'male' else 'male'
+        for child in node.get('children', []):
+            process_node(child)
+    for root in config.get('root', []):
+        process_node(root)
+    return config
+
+def get_image_path(name, image_type='profile'):
+    """
+    Retrieve the cached image path for a given name and image type.
+    """
+    name = name.strip().lower()
+    if image_type == 'profile':
+        return profile_files.get(name)
+    else:
+        return family_files.get(name)
+
+def get_default_image(gender):
+    """
+    Retrieve the default image path for a given gender.
+    """
+    gender = gender.lower()
+    if gender == 'male':
+        return default_male
+    elif gender == 'female':
+        return default_female
+    return None
+
+def get_family_image(member):
+    """
+    Retrieve the family photo for a member, if available.
+    """
+    if member.get('hasFamily') is False:
+        return None
+        
+    family_photo = get_image_path(member['name'], 'family')
+    if family_photo:
+        return family_photo
+        
+    if member.get('hasFamily') is True and default_family:
+        return default_family
+            
+    return None
+
+def has_family_photo(member):
+    """
+    Check if the member has a family photo.
+    """
+    return get_family_image(member) is not None
+
+def get_tile(member, config, font, label=None):
+    """
+    Create a tile for a member with their profile image and label.
+    """
+    tile = Image.new('RGB', (200, 250), 'white')
+    gender = member.get('gender', 'male')
+    base_name = member['name']
+    display_name = f"{base_name} ({label})" if label else base_name
+    
+    img = None
+    profile_path = get_image_path(base_name, 'profile')
+    if profile_path:
+        try:
+            img = Image.open(profile_path)
+        except Exception as e:
+            print(f"Error opening image {profile_path}: {e}")
+    
+    if not img:
+        default_path = get_default_image(gender)
+        if default_path:
+            try:
+                img = Image.open(default_path)
+            except Exception as e:
+                print(f"Error opening default image {default_path}: {e}")
+    
+    if not img:
+        color = 'dodgerblue' if gender.lower() == 'male' else 'hotpink'
+        img = Image.new('RGB', (200, 200), color)
+        d = ImageDraw.Draw(img)
+        d.text((100, 100), base_name, fill='white', anchor='mm', font=font)
+    
+    img = img.resize((200, 200))
+    tile.paste(img, (0, 0))
+    d = ImageDraw.Draw(tile)
+    d.text((tile.width/2, 225), display_name, fill='black', font=font, anchor='mm')
+    return tile
+
+def paste_tiles(canvas, tiles, y):
+    """
+    Paste tiles horizontally centered on the canvas.
+    """
+    total_width = sum(tile.width for tile in tiles) + SPACER * (len(tiles) - 1)
+    start_x = (CANVAS_WIDTH - total_width) // 2
+    for tile in tiles:
+        canvas.paste(tile, (start_x, y))
+        start_x += tile.width + SPACER
+
+def draw_person(canvas, node, y, show_spouse, config, font, is_root=False, label=None):
+    """
+    Draw a person (and their spouse, if applicable) on the canvas.
+    """
+    tiles = []
+    if show_spouse and node.get('spouse'):
+        main_label = label if label is not None else (None if is_root else "Child")
+        tiles.append(get_tile(node, config, font, label=main_label))
+        tiles.append(get_tile(node['spouse'], config, font, label="Spouse"))
+    else:
+        tiles.append(get_tile(node, config, font, label=label))
+    
+    paste_tiles(canvas, tiles, y)
+
+def draw_ancestors(canvas, ancestors, header_y, level_height, config, font):
+    """
+    Draw ancestors on the canvas.
+    """
+    for i, (node, lbl) in enumerate(ancestors):
+        is_root = (i == 0)
+        draw_person(canvas, node, header_y + i * level_height, True, config, font, is_root, label=lbl)
+
+def draw_centered_text(draw, y, text, font):
+    """
+    Draw centered text on the canvas.
+    """
+    text_bbox = draw.textbbox((0, 0), text, font=font)
+    text_width = text_bbox[2] - text_bbox[0]
+    draw.text(((CANVAS_WIDTH - text_width) // 2, y), text, fill="black", font=font)
+
+def create_focused_slideshow(config, slides_folder, font, label_font):
+    """
+    Create a slideshow focusing on family members and their relationships.
+    """
+    os.makedirs(slides_folder, exist_ok=True)
+    slide_files = []
+
+    root = config['root'][0]
+    print("Generating slide 0: Root only")
+    canvas = Image.new('RGB', (CANVAS_WIDTH, CANVAS_HEIGHT), 'white')
+    draw_person(canvas, root, HEADER_Y, True, config, font, is_root=True)
+    slide_path = os.path.join(slides_folder, "slide_focused_0.jpg")
+    canvas.save(slide_path)
+    slide_files.append(slide_path)
+    
+    print("Generating slide 1: Root with children")
+    canvas = Image.new('RGB', (CANVAS_WIDTH, CANVAS_HEIGHT), 'white')
+    draw_person(canvas, root, HEADER_Y, True, config, font, is_root=True)
+    children = root.get('children', [])
+    if children:
+        child_tiles = [get_tile(child, config, font, label=f"Child {i+1}") for i, child in enumerate(children)]
+        paste_tiles(canvas, child_tiles, HEADER_Y + LEVEL_HEIGHT)
+    slide_path = os.path.join(slides_folder, "slide_focused_1.jpg")
+    canvas.save(slide_path)
+    slide_files.append(slide_path)
+
+    slide_index = 2
+
+    def recursive_focus(ancestors, focus_node, slide_index, label=None):
+        """
+        Recursively generate slides focusing on descendants.
+        """
+        print(f"Generating slide {slide_index} for {focus_node['name']}")
+        if has_family_photo(focus_node):
+            canvas = Image.new('RGB', (CANVAS_WIDTH, CANVAS_HEIGHT), 'white')
+            draw_ancestors(canvas, ancestors, HEADER_Y, LEVEL_HEIGHT, config, font)
+            
+            family_photo_path = get_family_image(focus_node)
+            try:
+                group_img = Image.open(family_photo_path)
+                group_img = group_img.resize(GROUP_PIC_SIZE)
+            except Exception as e:
+                print(f"Error opening family photo {family_photo_path}: {e}")
+                group_img = Image.new('RGB', GROUP_PIC_SIZE, 'gray')
+            
+            x = (CANVAS_WIDTH - GROUP_PIC_SIZE[0]) // 2
+            y_group = HEADER_Y + len(ancestors) * LEVEL_HEIGHT
+            canvas.paste(group_img, (x, y_group))
+            
+            draw = ImageDraw.Draw(canvas)
+            y_text = y_group + GROUP_PIC_SIZE[1] + LINE_SPACING
+            line1_parts = []
+            member_label = focus_node['name']
+            if label: member_label += f" ({label})"
+            line1_parts.append(member_label)
+            if focus_node.get('spouse'):
+                spouse = focus_node['spouse']
+                spouse_label = f"{spouse['name']} (Spouse)"
+                line1_parts.append(spouse_label)
+            line1_text = " • ".join(line1_parts)
+            draw_centered_text(draw, y_text, line1_text, label_font)
+            y_text += LABEL_FONT_SIZE + LINE_SPACING
+            children = focus_node.get('children', [])
+            if children:
+                child_labels = [f"{child['name']} (Child {i+1})" for i, child in enumerate(children)]
+                line2_text = " • ".join(child_labels)
+                draw_centered_text(draw, y_text, line2_text, label_font)
+            slide_path = os.path.join(slides_folder, f"slide_focused_{slide_index}.jpg")
+            canvas.save(slide_path)
+            slide_files.append(slide_path)
+            slide_index += 1
+        else:
+            canvas = Image.new('RGB', (CANVAS_WIDTH, CANVAS_HEIGHT), 'white')
+            draw_ancestors(canvas, ancestors, HEADER_Y, LEVEL_HEIGHT, config, font)
+            draw_person(canvas, focus_node, HEADER_Y + len(ancestors) * LEVEL_HEIGHT, True, config, font, label=label)
+            slide_path = os.path.join(slides_folder, f"slide_focused_{slide_index}.jpg")
+            canvas.save(slide_path)
+            slide_files.append(slide_path)
+            slide_index += 1
+        
+            children = focus_node.get('children', [])
+            if children:
+                # Check if any child has a family photo
+                any_has_family = any(has_family_photo(child) for child in children)
+                
+                # Only show the group picture of siblings if none of them has a family photo
+                if not any_has_family:
+                    canvas2 = Image.new('RGB', (CANVAS_WIDTH, CANVAS_HEIGHT), 'white')
+                    draw_ancestors(canvas2, ancestors, HEADER_Y, LEVEL_HEIGHT, config, font)
+                    draw_person(canvas2, focus_node, HEADER_Y + len(ancestors) * LEVEL_HEIGHT, True, config, font, label=label)
+                    child_tiles = [get_tile(child, config, font, label=f"Child {i+1}") for i, child in enumerate(children)]
+                    paste_tiles(canvas2, child_tiles, HEADER_Y + (len(ancestors) + 1) * LEVEL_HEIGHT)
+                    slide_path = os.path.join(slides_folder, f"slide_focused_{slide_index}.jpg")
+                    canvas2.save(slide_path)
+                    slide_files.append(slide_path)
+                    slide_index += 1
+    
+            new_ancestors = ancestors + [(focus_node, label)]
+            for i, child in enumerate(children):
+                if child.get('spouse') or child.get('children'):
+                    slide_index = recursive_focus(new_ancestors, child, slide_index, label=f"Child {i+1}")
+        return slide_index
+
+    for i, child in enumerate(children):
+        if child.get('spouse') or child.get('children'):
+            slide_index = recursive_focus([(root, None)], child, slide_index, label=f"Child {i+1}")
+    
+    return slide_files
+
+def main():
+    """
+    Main function to generate the family video.
+    """
+    slides_folder = 'slides'
+    os.makedirs(slides_folder, exist_ok=True)
+
+    try:
+        with open(CONFIG_PATH) as f:
+            config = json.load(f)
+    except FileNotFoundError:
+        print(f"Configuration file {CONFIG_PATH} not found.")
+        exit(1)
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON: {e}")
+        exit(1)
+
+    config = preprocess_config(config)
+
+    global profile_files, family_files
+    profile_files = {
+        os.path.splitext(f)[0].lower(): os.path.join(PROFILE_IMAGES_PATH, f)
+        for f in os.listdir(PROFILE_IMAGES_PATH)
+        if os.path.splitext(f)[1].lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']
+    }
+    family_files = {
+        os.path.splitext(f)[0].lower(): os.path.join(FAMILY_IMAGES_PATH, f)
+        for f in os.listdir(FAMILY_IMAGES_PATH)
+        if os.path.splitext(f)[1].lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp']
+    }
+
+    try:
+        font = ImageFont.truetype("arial.ttf", 18)
+        label_font = ImageFont.truetype("arial.ttf", LABEL_FONT_SIZE)
+    except IOError:
+        font = ImageFont.load_default()
+        label_font = font  # Use default for labels as well
+
+    global default_male, default_female, default_family
+    default_male = os.path.join(DEFAULT_IMAGES_PATH, 'male.jpg')
+    default_female = os.path.join(DEFAULT_IMAGES_PATH, 'female.jpg')
+    default_family = os.path.join(DEFAULT_IMAGES_PATH, 'family.jpg')
+
+    if not os.path.exists(default_male):
+        default_male = None
+    if not os.path.exists(default_female):
+        default_female = None
+    if not os.path.exists(default_family):
+        default_family = None
+
+    slide_files = create_focused_slideshow(config, slides_folder, font, label_font)
+    
+    clip = ImageSequenceClip(slide_files, fps=1/5)
+    audio = AudioFileClip(MUSIC_PATH).with_duration(clip.duration)
+    final_clip = clip.with_audio(audio)
+    final_clip.write_videofile(OUTPUT_PATH, codec='libx264', audio_codec='aac')
+
+    shutil.rmtree(slides_folder)
+
+if __name__ == '__main__':
+    main()

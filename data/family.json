@@ -1,0 +1,173 @@
+{
+    "root": [
+        {
+            "name": "Elizabeth",
+            "gender": "female",
+            "spouse": {
+                "name": "James"
+            },
+            "children": [
+                {
+                    "name": "Robert",
+                    "gender": "male",
+                    "spouse": {
+                        "name": "Sarah"
+                    },
+                    "children": [
+                        {
+                            "name": "Michael",
+                            "gender": "male",
+                            "hasFamily": true,
+                            "spouse": {
+                                "name": "Emma"
+                            },
+                            "children": [
+                                {
+                                    "name": "Sophie",
+                                    "gender": "female"
+                                },
+                                {
+                                    "name": "Lucy",
+                                    "gender": "female"
+                                }
+                            ]
+                        },
+                        {
+                            "name": "David",
+                            "gender": "male",
+                            "spouse": {
+                                "name": "Emily"
+                            },
+                            "children": [
+                                {
+                                    "name": "Oliver",
+                                    "gender": "male"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "name": "William",
+                    "gender": "male",
+                    "spouse": {
+                        "name": "Margaret"
+                    },
+                    "children": [
+                        {
+                            "name": "Anna",
+                            "gender": "female",
+                            "spouse": {
+                                "name": "Thomas"
+                            },
+                            "children": [
+                                {
+                                    "name": "Peter",
+                                    "gender": "male"
+                                },
+                                {
+                                    "name": "Kevin",
+                                    "gender": "male"
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Mary",
+                            "gender": "female",
+                            "spouse": {
+                                "name": "Daniel"
+                            },
+                            "children": [
+                                {
+                                    "name": "Lucas",
+                                    "gender": "male"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "name": "Charles",
+                    "gender": "male",
+                    "spouse": {
+                        "name": "Patricia"
+                    },
+                    "children": [
+                        {
+                            "name": "Richard",
+                            "gender": "male",
+                            "spouse": {
+                                "name": "Linda"
+                            },
+                            "children": [
+                                {
+                                    "name": "Samuel",
+                                    "gender": "male"
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Catherine",
+                            "gender": "female",
+                            "spouse": {
+                                "name": "George"
+                            },
+                            "children": [
+                                {
+                                    "name": "John",
+                                    "gender": "male"
+                                },
+                                {
+                                    "name": "Alice",
+                                    "gender": "female"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "name": "Jennifer",
+                    "gender": "female",
+                    "spouse": {
+                        "name": "Christopher"
+                    },
+                    "children": [
+                        {
+                            "name": "Daniel",
+                            "gender": "male",
+                            "spouse": {
+                                "name": "Mary"
+                            },
+                            "children": [
+                                {
+                                    "name": "Lucas",
+                                    "gender": "male"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "name": "Victoria",
+                    "gender": "female",
+                    "spouse": {
+                        "name": "Andrew"
+                    },
+                    "children": [
+                        {
+                            "name": "Matthew",
+                            "gender": "male"
+                        },
+                        {
+                            "name": "Rachel",
+                            "gender": "female",
+                            "spouse": {
+                                "name": "Paul"
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}
