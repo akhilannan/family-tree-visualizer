@@ -223,7 +223,7 @@ def draw_person(
     Returns the connection point (x, y) for drawing further vertical lines.
     """
     if show_spouse and node.get("spouse"):
-        main_label = label if label is not None else (None if is_root else "Child")
+        main_label = label or node.get("customLabel") or (None if is_root else "Child")
         tiles = [
             get_tile(node, config, font, label=main_label),
             get_tile(node["spouse"], config, font, label="Spouse"),
@@ -300,7 +300,9 @@ def create_focused_slideshow(
     children = root.get("children", [])
     if children:
         child_tiles = [
-            get_tile(child, config, font, label=f"Child {i+1}")
+            get_tile(
+                child, config, font, label=child.get("customLabel", f"Child {i+1}")
+            )
             for i, child in enumerate(children)
         ]
         paste_tiles(canvas, child_tiles, HEADER_Y + LEVEL_HEIGHT)
@@ -351,7 +353,9 @@ def create_focused_slideshow(
             )
             paste_y = HEADER_Y + (len(ancestors) + 1) * LEVEL_HEIGHT
             child_tiles = [
-                get_tile(child, config, font, label=f"Child {i+1}")
+                get_tile(
+                    child, config, font, label=child.get("customLabel", f"Child {i+1}")
+                )
                 for i, child in enumerate(children)
             ]
             child_positions = paste_tiles(group_canvas, child_tiles, paste_y)
@@ -377,7 +381,7 @@ def create_focused_slideshow(
 
             new_ancestors = ancestors + [(focus_node, label)]
             for i, child in enumerate(children):
-                child_label = f"Child {i+1}"
+                child_label = child.get("customLabel", f"Child {i+1}")
                 if has_family_photo(child):
                     print(f"Generating family slide {slide_index} for {child['name']}")
                     family_canvas = Image.new(
@@ -407,7 +411,9 @@ def create_focused_slideshow(
                     family_canvas.paste(group_img, (x, y_group))
                     draw_obj = ImageDraw.Draw(family_canvas)
                     y_text = y_group + group_img.height + LINE_SPACING
-                    line1 = f"{child['name']} (Child {i+1})"
+                    line1 = (
+                        f"{child['name']} ({child.get('customLabel', f'Child {i+1}')})"
+                    )
                     if child.get("spouse", {}).get("name"):
                         line1 += f", {child['spouse']['name']} (Spouse)"
                     draw_centered_text(draw_obj, y_text, line1, label_font)
@@ -428,14 +434,18 @@ def create_focused_slideshow(
                     slide_index += 1
                 else:
                     slide_index = recursive_focus(
-                        new_ancestors, child, slide_index, label=child_label
+                        ancestors + [(focus_node, label)],
+                        child,
+                        slide_index,
+                        label=child_label,
                     )
         return slide_index
 
     for i, child in enumerate(root.get("children", [])):
         if child.get("spouse") or child.get("children"):
+            initial_label = child.get("customLabel", f"Child {i+1}")
             slide_index = recursive_focus(
-                [(root, None)], child, slide_index, label=f"Child {i+1}"
+                [(root, None)], child, slide_index, label=initial_label
             )
     return slide_files
 
