@@ -8,6 +8,7 @@ from moviepy import ImageSequenceClip, AudioFileClip
 CONFIG_PATH = 'data/family.json'
 MUSIC_PATH = 'assets/audio/background.mp3'
 OUTPUT_PATH = 'family_video.mp4'
+TREE_IMAGE_PATH = 'complete_family_tree.jpg'
 CANVAS_WIDTH = 1200
 CANVAS_HEIGHT = 1600
 HEADER_Y = 50
@@ -17,6 +18,9 @@ GROUP_PIC_MAX_WIDTH = 1000  # Maximum width for family photos
 GROUP_PIC_MAX_HEIGHT = 600  # Maximum height for family photos
 LABEL_FONT_SIZE = 24
 LINE_SPACING = 40
+LINE_MARGIN = 5  # margin to ensure lines stay outside the images
+H_SPACER = 30  # horizontal spacing between sibling subtrees
+V_SPACER = 50  # vertical spacing between levels
 
 # Image paths
 PROFILE_IMAGES_PATH = 'assets/images/profiles'
@@ -136,34 +140,67 @@ def get_tile(member, config, font, label=None):
     
     # Draw the label centered below the image.
     d = ImageDraw.Draw(tile)
-    text_y = base_img_size + ( (tile_height - base_img_size) // 2 )
+    text_y = base_img_size + ((tile_height - base_img_size) // 2)
     d.text((tile_width // 2, text_y), display_name, fill='black', font=font, anchor='mm')
     
     return tile
 
+def get_member_tile(member, config, font, label=None):
+    """
+    Create a combined tile for a member. If the member has a spouse,
+    combine their tiles side by side with a horizontal spacer.
+    """
+    if member.get('spouse'):
+        tile1 = get_tile(member, config, font, label=label)
+        tile2 = get_tile(member['spouse'], config, font, label="Spouse")
+        height = max(tile1.height, tile2.height)
+        width = tile1.width + SPACER + tile2.width
+        combined = Image.new('RGB', (width, height), 'white')
+        y1 = (height - tile1.height) // 2
+        y2 = (height - tile2.height) // 2
+        combined.paste(tile1, (0, y1))
+        combined.paste(tile2, (tile1.width + SPACER, y2))
+        return combined
+    else:
+        return get_tile(member, config, font, label=label)
+
 def paste_tiles(canvas, tiles, y):
     """
     Paste tiles horizontally centered on the canvas.
+    Returns a list of (x,y,width,height) for each pasted tile.
     """
+    positions = []
     total_width = sum(tile.width for tile in tiles) + SPACER * (len(tiles) - 1)
     start_x = (CANVAS_WIDTH - total_width) // 2
     for tile in tiles:
         canvas.paste(tile, (start_x, y))
+        positions.append((start_x, y, tile.width, tile.height))
         start_x += tile.width + SPACER
+    return positions
 
 def draw_person(canvas, node, y, show_spouse, config, font, is_root=False, label=None):
     """
     Draw a person (and their spouse, if applicable) on the canvas.
+    Returns the connection point (x, y) for drawing further vertical lines.
     """
-    tiles = []
+    draw = ImageDraw.Draw(canvas)
+    positions = []
     if show_spouse and node.get('spouse'):
         main_label = label if label is not None else (None if is_root else "Child")
-        tiles.append(get_tile(node, config, font, label=main_label))
-        tiles.append(get_tile(node['spouse'], config, font, label="Spouse"))
+        tile1 = get_tile(node, config, font, label=main_label)
+        tile2 = get_tile(node['spouse'], config, font, label="Spouse")
+        positions = paste_tiles(canvas, [tile1, tile2], y)
     else:
-        tiles.append(get_tile(node, config, font, label=label))
+        tile = get_tile(node, config, font, label=label)
+        positions = paste_tiles(canvas, [tile], y)
     
-    paste_tiles(canvas, tiles, y)
+    # Return a connection point from which vertical lines to children will emerge
+    left = positions[0][0]
+    right = positions[-1][0] + positions[-1][2]
+    mid_x = (left + right) // 2
+    bottom_y = max(pos[1] + pos[3] for pos in positions)
+    connection_point = (mid_x, bottom_y + LINE_MARGIN)
+    return connection_point
 
 def draw_ancestors(canvas, ancestors, header_y, level_height, config, font):
     """
@@ -222,7 +259,7 @@ def create_focused_slideshow(config, slides_folder, font, label_font):
         print(f"Generating base slide {slide_index} for {focus_node['name']}")
         canvas = Image.new('RGB', (CANVAS_WIDTH, CANVAS_HEIGHT), 'white')
         draw_ancestors(canvas, ancestors, HEADER_Y, LEVEL_HEIGHT, config, font)
-        draw_person(canvas, focus_node, HEADER_Y + len(ancestors)*LEVEL_HEIGHT, True, config, font, label=label)
+        parent_conn = draw_person(canvas, focus_node, HEADER_Y + len(ancestors)*LEVEL_HEIGHT, True, config, font, label=label)
         slide_path = os.path.join(slides_folder, f"slide_focused_{slide_index}.jpg")
         canvas.save(slide_path)
         slide_files.append(slide_path)
@@ -234,9 +271,24 @@ def create_focused_slideshow(config, slides_folder, font, label_font):
             print(f"Generating group slide {slide_index} for children of {focus_node['name']}")
             canvas2 = Image.new('RGB', (CANVAS_WIDTH, CANVAS_HEIGHT), 'white')
             draw_ancestors(canvas2, ancestors, HEADER_Y, LEVEL_HEIGHT, config, font)
-            draw_person(canvas2, focus_node, HEADER_Y + len(ancestors)*LEVEL_HEIGHT, True, config, font, label=label)
+            parent_conn = draw_person(canvas2, focus_node, HEADER_Y + len(ancestors)*LEVEL_HEIGHT, True, config, font, label=label)
+            paste_y = HEADER_Y + (len(ancestors)+1)*LEVEL_HEIGHT
             child_tiles = [get_tile(child, config, font, label=f"Child {i+1}") for i, child in enumerate(children)]
-            paste_tiles(canvas2, child_tiles, HEADER_Y + (len(ancestors)+1)*LEVEL_HEIGHT)
+            child_positions = paste_tiles(canvas2, child_tiles, paste_y)
+            # Now, draw connecting lines between parent's connection point and children.
+            draw2 = ImageDraw.Draw(canvas2)
+            # Use a horizontal line at a y level just above the children tiles.
+            horiz_y = paste_y - LINE_MARGIN
+            # Draw vertical line from parent's connection point down to horiz_y.
+            draw2.line([parent_conn, (parent_conn[0], horiz_y)], fill="gray", width=2)
+            # For each child, compute the mid point at the top of its tile and draw a vertical line up to horiz_y.
+            child_mid_points = [(x + w//2, y) for (x, y, w, h) in child_positions]
+            for cm in child_mid_points:
+                draw2.line([cm, (cm[0], horiz_y)], fill="gray", width=2)
+            # Draw a horizontal line connecting the lowest points of all child vertical lines.
+            left_line = min(cm[0] for cm in child_mid_points)
+            right_line = max(cm[0] for cm in child_mid_points)
+            draw2.line([(left_line, horiz_y), (right_line, horiz_y)], fill="gray", width=2)
             slide_path = os.path.join(slides_folder, f"slide_focused_{slide_index}.jpg")
             canvas2.save(slide_path)
             slide_files.append(slide_path)
@@ -299,15 +351,137 @@ def create_focused_slideshow(config, slides_folder, font, label_font):
                     slide_index = recursive_focus(new_ancestors, child, slide_index, label=child_label)
         return slide_index
 
-    for i, child in enumerate(children):
+    for i, child in enumerate(root.get('children', [])):
         if child.get('spouse') or child.get('children'):
             slide_index = recursive_focus([(root, None)], child, slide_index, label=f"Child {i+1}")
     
     return slide_files
 
+def compute_subtree(node, config, font):
+    """
+    Recursively compute the subtree dimensions and pre-render the node tile.
+    Returns a dict with keys: tile, width, height, children, and family_img.
+    """
+    # Use get_member_tile to show spouse if available.
+    tile = get_member_tile(node, config, font)
+    tile_width, tile_height = tile.size
+
+    children_subtrees = []
+    subtree_width = tile_width
+    subtree_height = tile_height
+
+    # Process children if any.
+    if node.get('children'):
+        for child in node['children']:
+            child_tree = compute_subtree(child, config, font)
+            children_subtrees.append(child_tree)
+        # Total width needed for children
+        children_width = sum(child['width'] for child in children_subtrees) + H_SPACER * (len(children_subtrees) - 1)
+        # Height is parent's tile height + vertical spacing + max (child subtree height)
+        children_height = max(child['height'] for child in children_subtrees)
+        subtree_width = max(tile_width, children_width)
+        subtree_height = tile_height + V_SPACER + children_height
+
+    # If a family photo exists for the current node, account for it.
+    family_img = None
+    if has_family_photo(node):
+        family_photo_path = get_family_image(node)
+        try:
+            family_img = Image.open(family_photo_path)
+            aspect_ratio = family_img.width / family_img.height
+            if aspect_ratio > GROUP_PIC_MAX_WIDTH / GROUP_PIC_MAX_HEIGHT:
+                new_width = GROUP_PIC_MAX_WIDTH
+                new_height = int(new_width / aspect_ratio)
+            else:
+                new_height = GROUP_PIC_MAX_HEIGHT
+                new_width = int(new_height * aspect_ratio)
+            family_img = family_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        except Exception as e:
+            print(f"Error opening family photo {family_photo_path}: {e}")
+            family_img = None
+        if family_img:
+            # Add space for the family image below all descendants (or directly below tile if no children).
+            subtree_height += V_SPACER + family_img.height
+            subtree_width = max(subtree_width, family_img.width)
+
+    return {
+        'tile': tile,
+        'width': subtree_width,
+        'height': subtree_height,
+        'children': children_subtrees,
+        'family_img': family_img
+    }
+
+def draw_subtree(canvas, subtree, top_left_x, top_left_y):
+    """
+    Recursively draw the subtree on the canvas starting at (top_left_x, top_left_y).
+    """
+    # Draw the current node's tile (centered in the allocated width)
+    tile = subtree['tile']
+    tile_width, tile_height = tile.size
+    allocated_width = subtree['width']
+    node_x = top_left_x + (allocated_width - tile_width) // 2
+    node_y = top_left_y
+    canvas.paste(tile, (node_x, node_y))
+
+    current_bottom = node_y + tile_height
+
+    # Draw children (if any)
+    if subtree['children']:
+        total_children_width = sum(child['width'] for child in subtree['children']) + H_SPACER * (len(subtree['children']) - 1)
+        children_top = current_bottom + V_SPACER
+        start_x = top_left_x + (allocated_width - total_children_width) // 2
+        child_centers = []
+        # Draw each child subtree.
+        for child in subtree['children']:
+            draw_subtree(canvas, child, start_x, children_top)
+            child_center = (start_x + child['width'] // 2, children_top + child['height'] // 2)
+            child_centers.append(child_center)
+            start_x += child['width'] + H_SPACER
+
+        # Draw vertical connector from parent's bottom center to the horizontal level of children.
+        d = ImageDraw.Draw(canvas)
+        parent_center = (top_left_x + allocated_width // 2, node_y + tile_height)
+        children_line_y = children_top
+        d.line([parent_center, (parent_center[0], children_line_y)], fill="gray", width=2)
+        # Optionally, draw a horizontal connector if there are multiple children.
+        if len(child_centers) > 1:
+            left_x = min(x for x, y in child_centers)
+            right_x = max(x for x, y in child_centers)
+            d.line([(left_x, children_line_y), (right_x, children_line_y)], fill="gray", width=2)
+            # Draw vertical lines from each child's top center to the horizontal line.
+            for cx, _ in child_centers:
+                d.line([(cx, children_line_y), (cx, children_top)], fill="gray", width=2)
+
+        current_bottom = children_top + max(child['height'] for child in subtree['children'])
+    # Draw family photo (if available) at the bottom of this subtree.
+    if subtree['family_img']:
+        family_img = subtree['family_img']
+        family_img_width, family_img_height = family_img.size
+        family_top = current_bottom + V_SPACER
+        family_x = top_left_x + (allocated_width - family_img_width) // 2
+        canvas.paste(family_img, (family_x, family_top))
+        current_bottom = family_top + family_img_height
+
+def create_complete_tree(config, font, label_font):
+    """
+    Create a dynamically sized complete family tree image.
+    """
+    root = config['root'][0]
+    subtree = compute_subtree(root, config, font)
+
+    # Add some padding around the tree.
+    padding = 50
+    canvas_width = subtree['width'] + 2 * padding
+    canvas_height = subtree['height'] + 2 * padding
+
+    canvas = Image.new('RGB', (canvas_width, canvas_height), 'white')
+    draw_subtree(canvas, subtree, padding, padding)
+    canvas.save(TREE_IMAGE_PATH)
+
 def main():
     """
-    Main function to generate the family video.
+    Main function to generate both the family video and complete tree image.
     """
     slides_folder = 'slides'
     os.makedirs(slides_folder, exist_ok=True)
@@ -355,8 +529,13 @@ def main():
     if not os.path.exists(default_family):
         default_family = None
 
+    # Generate the video slides
     slide_files = create_focused_slideshow(config, slides_folder, font, label_font)
     
+    # Generate the complete tree image
+    create_complete_tree(config, font, label_font)
+    
+    # Create the video
     clip = ImageSequenceClip(slide_files, fps=1/5)
     audio = AudioFileClip(MUSIC_PATH).with_duration(clip.duration)
     final_clip = clip.with_audio(audio)
