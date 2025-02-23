@@ -13,7 +13,8 @@ CANVAS_HEIGHT = 1600
 HEADER_Y = 50
 LEVEL_HEIGHT = 270
 SPACER = 20
-GROUP_PIC_SIZE = (800, 450)
+GROUP_PIC_MAX_WIDTH = 1000  # Maximum width for family photos
+GROUP_PIC_MAX_HEIGHT = 600  # Maximum height for family photos
 LABEL_FONT_SIZE = 24
 LINE_SPACING = 40
 
@@ -83,12 +84,27 @@ def has_family_photo(member):
 def get_tile(member, config, font, label=None):
     """
     Create a tile for a member with their profile image and label.
+    Dynamically adjusts the tile width so the full label is always visible.
     """
-    tile = Image.new('RGB', (200, 250), 'white')
-    gender = member.get('gender', 'male')
+    base_img_size = 200
+    text_padding = 10  # extra padding around text
+
     base_name = member['name']
     display_name = f"{base_name} ({label})" if label else base_name
-    
+
+    # Create a temporary image to measure text size.
+    temp_img = Image.new('RGB', (1, 1))
+    temp_draw = ImageDraw.Draw(temp_img)
+    text_bbox = temp_draw.textbbox((0, 0), display_name, font=font)
+    text_width = text_bbox[2] - text_bbox[0]
+
+    # Determine tile width: at minimum base_img_size, or wider if label is longer.
+    tile_width = max(base_img_size, text_width + 2 * text_padding)
+    tile_height = base_img_size + 50  # extra space for label below image
+
+    tile = Image.new('RGB', (tile_width, tile_height), 'white')
+
+    # Attempt to open the profile image.
     img = None
     profile_path = get_image_path(base_name, 'profile')
     if profile_path:
@@ -96,25 +112,33 @@ def get_tile(member, config, font, label=None):
             img = Image.open(profile_path)
         except Exception as e:
             print(f"Error opening image {profile_path}: {e}")
-    
+
     if not img:
-        default_path = get_default_image(gender)
+        default_path = get_default_image(member.get('gender', 'male'))
         if default_path:
             try:
                 img = Image.open(default_path)
             except Exception as e:
                 print(f"Error opening default image {default_path}: {e}")
-    
+
     if not img:
-        color = 'dodgerblue' if gender.lower() == 'male' else 'hotpink'
-        img = Image.new('RGB', (200, 200), color)
+        # If no image available, create a placeholder.
+        color = 'dodgerblue' if member.get('gender', 'male').lower() == 'male' else 'hotpink'
+        img = Image.new('RGB', (base_img_size, base_img_size), color)
         d = ImageDraw.Draw(img)
-        d.text((100, 100), base_name, fill='white', anchor='mm', font=font)
+        d.text((base_img_size//2, base_img_size//2), base_name, fill='white', anchor='mm', font=font)
+    else:
+        img = img.resize((base_img_size, base_img_size))
     
-    img = img.resize((200, 200))
-    tile.paste(img, (0, 0))
+    # Paste the image centered horizontally.
+    img_x = (tile_width - base_img_size) // 2
+    tile.paste(img, (img_x, 0))
+    
+    # Draw the label centered below the image.
     d = ImageDraw.Draw(tile)
-    d.text((tile.width/2, 225), display_name, fill='black', font=font, anchor='mm')
+    text_y = base_img_size + ( (tile_height - base_img_size) // 2 )
+    d.text((tile_width // 2, text_y), display_name, fill='black', font=font, anchor='mm')
+    
     return tile
 
 def paste_tiles(canvas, tiles, y):
@@ -188,76 +212,91 @@ def create_focused_slideshow(config, slides_folder, font, label_font):
     def recursive_focus(ancestors, focus_node, slide_index, label=None):
         """
         Recursively generate slides focusing on descendants.
+        Updated:
+          - Always generate a base focus slide for the node.
+          - If children exist, always generate a group slide showing the children.
+          - For each child: if the child has a family pic, generate a special family slide (with centered multiple
+            label lines) and skip further recursion for that child. Otherwise, recurse normally.
         """
-        print(f"Generating slide {slide_index} for {focus_node['name']}")
-        if has_family_photo(focus_node):
-            canvas = Image.new('RGB', (CANVAS_WIDTH, CANVAS_HEIGHT), 'white')
-            draw_ancestors(canvas, ancestors, HEADER_Y, LEVEL_HEIGHT, config, font)
-            
-            family_photo_path = get_family_image(focus_node)
-            try:
-                group_img = Image.open(family_photo_path)
-                group_img = group_img.resize(GROUP_PIC_SIZE)
-            except Exception as e:
-                print(f"Error opening family photo {family_photo_path}: {e}")
-                group_img = Image.new('RGB', GROUP_PIC_SIZE, 'gray')
-            
-            x = (CANVAS_WIDTH - GROUP_PIC_SIZE[0]) // 2
-            y_group = HEADER_Y + len(ancestors) * LEVEL_HEIGHT
-            canvas.paste(group_img, (x, y_group))
-            
-            draw = ImageDraw.Draw(canvas)
-            y_text = y_group + GROUP_PIC_SIZE[1] + LINE_SPACING
-            line1_parts = []
-            member_label = focus_node['name']
-            if label: member_label += f" ({label})"
-            line1_parts.append(member_label)
-            if focus_node.get('spouse'):
-                spouse = focus_node['spouse']
-                spouse_label = f"{spouse['name']} (Spouse)"
-                line1_parts.append(spouse_label)
-            line1_text = " • ".join(line1_parts)
-            draw_centered_text(draw, y_text, line1_text, label_font)
-            y_text += LABEL_FONT_SIZE + LINE_SPACING
-            children = focus_node.get('children', [])
-            if children:
-                child_labels = [f"{child['name']} (Child {i+1})" for i, child in enumerate(children)]
-                line2_text = " • ".join(child_labels)
-                draw_centered_text(draw, y_text, line2_text, label_font)
+        # Base slide: show the focused node normally.
+        print(f"Generating base slide {slide_index} for {focus_node['name']}")
+        canvas = Image.new('RGB', (CANVAS_WIDTH, CANVAS_HEIGHT), 'white')
+        draw_ancestors(canvas, ancestors, HEADER_Y, LEVEL_HEIGHT, config, font)
+        draw_person(canvas, focus_node, HEADER_Y + len(ancestors)*LEVEL_HEIGHT, True, config, font, label=label)
+        slide_path = os.path.join(slides_folder, f"slide_focused_{slide_index}.jpg")
+        canvas.save(slide_path)
+        slide_files.append(slide_path)
+        slide_index += 1
+
+        children = focus_node.get('children', [])
+        if children:
+            # Group slide: show the focused node again with its children tiled below.
+            print(f"Generating group slide {slide_index} for children of {focus_node['name']}")
+            canvas2 = Image.new('RGB', (CANVAS_WIDTH, CANVAS_HEIGHT), 'white')
+            draw_ancestors(canvas2, ancestors, HEADER_Y, LEVEL_HEIGHT, config, font)
+            draw_person(canvas2, focus_node, HEADER_Y + len(ancestors)*LEVEL_HEIGHT, True, config, font, label=label)
+            child_tiles = [get_tile(child, config, font, label=f"Child {i+1}") for i, child in enumerate(children)]
+            paste_tiles(canvas2, child_tiles, HEADER_Y + (len(ancestors)+1)*LEVEL_HEIGHT)
             slide_path = os.path.join(slides_folder, f"slide_focused_{slide_index}.jpg")
-            canvas.save(slide_path)
+            canvas2.save(slide_path)
             slide_files.append(slide_path)
             slide_index += 1
-        else:
-            canvas = Image.new('RGB', (CANVAS_WIDTH, CANVAS_HEIGHT), 'white')
-            draw_ancestors(canvas, ancestors, HEADER_Y, LEVEL_HEIGHT, config, font)
-            draw_person(canvas, focus_node, HEADER_Y + len(ancestors) * LEVEL_HEIGHT, True, config, font, label=label)
-            slide_path = os.path.join(slides_folder, f"slide_focused_{slide_index}.jpg")
-            canvas.save(slide_path)
-            slide_files.append(slide_path)
-            slide_index += 1
-        
-            children = focus_node.get('children', [])
-            if children:
-                # Check if any child has a family photo
-                any_has_family = any(has_family_photo(child) for child in children)
-                
-                # Only show the group picture of siblings if none of them has a family photo
-                if not any_has_family:
-                    canvas2 = Image.new('RGB', (CANVAS_WIDTH, CANVAS_HEIGHT), 'white')
-                    draw_ancestors(canvas2, ancestors, HEADER_Y, LEVEL_HEIGHT, config, font)
-                    draw_person(canvas2, focus_node, HEADER_Y + len(ancestors) * LEVEL_HEIGHT, True, config, font, label=label)
-                    child_tiles = [get_tile(child, config, font, label=f"Child {i+1}") for i, child in enumerate(children)]
-                    paste_tiles(canvas2, child_tiles, HEADER_Y + (len(ancestors) + 1) * LEVEL_HEIGHT)
-                    slide_path = os.path.join(slides_folder, f"slide_focused_{slide_index}.jpg")
-                    canvas2.save(slide_path)
-                    slide_files.append(slide_path)
-                    slide_index += 1
-    
+
+            # Recurse for each child.
             new_ancestors = ancestors + [(focus_node, label)]
             for i, child in enumerate(children):
-                if child.get('spouse') or child.get('children'):
-                    slide_index = recursive_focus(new_ancestors, child, slide_index, label=f"Child {i+1}")
+                child_label = f"Child {i+1}"
+                # If a child has a family pic, show the special family slide and skip further recursion.
+                if has_family_photo(child):
+                    print(f"Generating family slide {slide_index} for {child['name']}")
+                    canvas3 = Image.new('RGB', (CANVAS_WIDTH, CANVAS_HEIGHT), 'white')
+                    draw_ancestors(canvas3, new_ancestors, HEADER_Y, LEVEL_HEIGHT, config, font)
+                    # Process the family image.
+                    family_photo_path = get_family_image(child)
+                    try:
+                        group_img = Image.open(family_photo_path)
+                        # Calculate new dimensions while preserving aspect ratio.
+                        aspect_ratio = group_img.width / group_img.height
+                        if aspect_ratio > GROUP_PIC_MAX_WIDTH / GROUP_PIC_MAX_HEIGHT:
+                            new_width = GROUP_PIC_MAX_WIDTH
+                            new_height = int(new_width / aspect_ratio)
+                        else:
+                            new_height = GROUP_PIC_MAX_HEIGHT
+                            new_width = int(new_height * aspect_ratio)
+                        group_img = group_img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    except Exception as e:
+                        print(f"Error opening family photo {family_photo_path}: {e}")
+                        group_img = Image.new('RGB', (GROUP_PIC_MAX_WIDTH, GROUP_PIC_MAX_HEIGHT), 'gray')
+                    # Center the family photo.
+                    x = (CANVAS_WIDTH - group_img.width) // 2
+                    y_group = HEADER_Y + len(new_ancestors) * LEVEL_HEIGHT
+                    canvas3.paste(group_img, (x, y_group))
+                    # Draw centered multi-line labels.
+                    draw_obj = ImageDraw.Draw(canvas3)
+                    y_text = y_group + group_img.height + LINE_SPACING
+                    # Line 1: the focused child and its spouse (if any).
+                    line1 = f"{child['name']} (Child {i+1})"
+                    if child.get('spouse'):
+                        spouse_name = child['spouse'].get('name', '')
+                        if spouse_name:
+                            line1 += f", {spouse_name} (Spouse)"
+                    draw_centered_text(draw_obj, y_text, line1, label_font)
+                    y_text += LABEL_FONT_SIZE + LINE_SPACING
+                    # Line 2: labels for the children included in the group picture.
+                    if child.get('children'):
+                        child_labels = [
+                            f"{c['name']} (Child {j+1})" for j, c in enumerate(child['children'])
+                        ]
+                        line2 = ", ".join(child_labels)
+                        draw_centered_text(draw_obj, y_text, line2, label_font)
+                        y_text += LABEL_FONT_SIZE + LINE_SPACING
+                    slide_path = os.path.join(slides_folder, f"slide_focused_{slide_index}.jpg")
+                    canvas3.save(slide_path)
+                    slide_files.append(slide_path)
+                    slide_index += 1
+                    # Skip further recursion for this child.
+                else:
+                    slide_index = recursive_focus(new_ancestors, child, slide_index, label=child_label)
         return slide_index
 
     for i, child in enumerate(children):
