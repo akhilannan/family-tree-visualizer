@@ -140,7 +140,6 @@ def has_family_photo(member: dict, cache: ImageCache) -> bool:
     """
     return get_family_image(member, cache) is not None
 
-
 def resize_image(img: Image.Image, max_width: int, max_height: int) -> Image.Image:
     """
     Resize image preserving aspect ratio to fit within max dimensions.
@@ -153,7 +152,6 @@ def resize_image(img: Image.Image, max_width: int, max_height: int) -> Image.Ima
         new_height = max_height
         new_width = int(new_height * aspect_ratio)
     return img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
 
 def load_image(
     path: str, default_path: str = None, default_size: Tuple[int, int] = None
@@ -173,7 +171,6 @@ def load_image(
         if default_size:
             return Image.new("RGB", default_size, "gray")
     return None
-
 
 def get_tile(
     node: dict,
@@ -302,7 +299,6 @@ def get_tile(
 
     return canvas
 
-
 def get_member_tile(
     member: dict,
     config: dict,
@@ -327,7 +323,6 @@ def get_member_tile(
         return combined
     return get_tile(member, config, font, cache, label=label)
 
-
 def paste_tiles(canvas: Image.Image, tiles: list, y: int) -> list:
     """
     Paste tiles horizontally centered on the canvas.
@@ -341,7 +336,6 @@ def paste_tiles(canvas: Image.Image, tiles: list, y: int) -> list:
         positions.append((start_x, y, tile.width, tile.height))
         start_x += tile.width + SPACER
     return positions
-
 
 def draw_person(
     canvas: Image.Image,
@@ -387,7 +381,6 @@ def draw_person(
     bottom_y = max(pos[1] + pos[3] for pos in positions)
     return (mid_x, bottom_y + LINE_MARGIN)
 
-
 def draw_ancestors(
     canvas: Image.Image,
     ancestors: list,
@@ -414,7 +407,6 @@ def draw_ancestors(
             label=lbl,
         )
 
-
 def draw_centered_text(
     draw: ImageDraw.ImageDraw, y: int, text: str, font: ImageFont.FreeTypeFont
 ) -> None:
@@ -424,7 +416,6 @@ def draw_centered_text(
     text_bbox = draw.textbbox((0, 0), text, font=font)
     text_width = text_bbox[2] - text_bbox[0]
     draw.text(((CANVAS_WIDTH - text_width) // 2, y), text, fill="black", font=font)
-
 
 def create_focused_slideshow(
     config: dict,
@@ -620,7 +611,6 @@ def create_focused_slideshow(
             )
     return slide_files
 
-
 def compute_subtree(
     node: dict, config: dict, font: ImageFont.FreeTypeFont, cache: ImageCache
 ) -> dict:
@@ -675,7 +665,6 @@ def compute_subtree(
         "family_img": family_img,
         "original_width": tile_width,  # Store original tile width for centering
     }
-
 
 def draw_subtree(canvas: Image.Image, subtree: dict, x: int, y: int) -> tuple:
     """
@@ -825,7 +814,6 @@ def draw_subtree(canvas: Image.Image, subtree: dict, x: int, y: int) -> tuple:
 
     return node_center
 
-
 def create_complete_tree(
     config: dict,
     font: ImageFont.FreeTypeFont,
@@ -844,7 +832,6 @@ def create_complete_tree(
     draw_subtree(canvas, subtree, padding, padding)
     canvas.save(TREE_IMAGE_PATH)
 
-
 def load_fonts() -> Tuple[ImageFont.FreeTypeFont, ImageFont.FreeTypeFont]:
     """Load and return the required fonts."""
     try:
@@ -856,49 +843,58 @@ def load_fonts() -> Tuple[ImageFont.FreeTypeFont, ImageFont.FreeTypeFont]:
         label_font = font
     return font, label_font
 
+def create_final_slide(complete_tree: Image.Image, slides_folder: str) -> str:
+    """Create the final slide with the complete family tree."""
+    final_slide_path = os.path.join(slides_folder, "slide_final.jpg")
+    final_canvas = Image.new("RGB", (CANVAS_WIDTH, CANVAS_HEIGHT), "white")
+    
+    # Calculate resize dimensions while preserving aspect ratio
+    aspect_ratio = complete_tree.width / complete_tree.height
+    if aspect_ratio > CANVAS_WIDTH / CANVAS_HEIGHT:
+        new_width = CANVAS_WIDTH
+        new_height = int(new_width / aspect_ratio)
+    else:
+        new_height = CANVAS_HEIGHT
+        new_width = int(new_height * aspect_ratio)
+    
+    resized_tree = complete_tree.resize((new_width, new_height), Image.Resampling.LANCZOS)
+    x, y = (CANVAS_WIDTH - new_width) // 2, (CANVAS_HEIGHT - new_height) // 2
+    final_canvas.paste(resized_tree, (x, y))
+    final_canvas.save(final_slide_path)
+    return final_slide_path
 
 def main() -> None:
-    """
-    Main function to generate both the family video and complete tree image.
-    """
+    """Main function to generate both the family video and complete tree image."""
     slides_folder = "slides"
     os.makedirs(slides_folder, exist_ok=True)
 
     try:
         with open(CONFIG_PATH) as f:
-            config = json.load(f)
-    except FileNotFoundError:
-        print(f"Configuration file {CONFIG_PATH} not found.")
-        exit(1)
-    except json.JSONDecodeError as e:
-        print(f"Error parsing JSON: {e}")
+            config = preprocess_config(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"Error loading configuration: {e}")
         exit(1)
 
-    config = preprocess_config(config)
-
-    # Initialize image cache
     cache = ImageCache()
     cache.initialize()
-
-    # Load fonts
     font, label_font = load_fonts()
 
-    # Generate the video slides
-    slide_files = create_focused_slideshow(
-        config, slides_folder, font, label_font, cache
-    )
-
-    # Generate the complete tree image
+    # Generate tree and slides
     create_complete_tree(config, font, label_font, cache)
+    slide_files = create_focused_slideshow(config, slides_folder, font, label_font, cache)
+    
+    # Add final slide
+    with Image.open(TREE_IMAGE_PATH) as complete_tree:
+        final_slide = create_final_slide(complete_tree, slides_folder)
+        slide_files.append(final_slide)
 
-    # Create the video
-    clip = ImageSequenceClip(slide_files, fps=1 / 5)
-    audio = AudioFileClip(MUSIC_PATH).with_duration(clip.duration)
-    final_clip = clip.with_audio(audio)
-    final_clip.write_videofile(OUTPUT_PATH, codec="libx264", audio_codec="aac")
-
-    shutil.rmtree(slides_folder)
-
+    # Create video with audio
+    try:
+        clip = ImageSequenceClip(slide_files, fps=1/5)
+        audio = AudioFileClip(MUSIC_PATH).with_duration(clip.duration)
+        clip.with_audio(audio).write_videofile(OUTPUT_PATH, codec="libx264", audio_codec="aac")
+    finally:
+        shutil.rmtree(slides_folder)
 
 if __name__ == "__main__":
     main()
