@@ -1,6 +1,8 @@
 import json
 import os
 import shutil
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 from PIL import Image, ImageDraw, ImageFont
 from moviepy import ImageSequenceClip, AudioFileClip
 
@@ -21,11 +23,55 @@ LINE_SPACING = 40
 LINE_MARGIN = 5  # margin to ensure lines stay outside the images
 H_SPACER = 30  # horizontal spacing between sibling subtrees
 V_SPACER = 50  # vertical spacing between levels
+LINE_COLOR = "#D3D3D3"  # Light grey color
+LINE_WIDTH = 8  # Thicker lines
 
 # Image paths
 PROFILE_IMAGES_PATH = "assets/images/profiles"
 FAMILY_IMAGES_PATH = "assets/images/families"
 DEFAULT_IMAGES_PATH = "assets/images/defaults"
+
+
+@dataclass
+class ImageCache:
+    """Class to store image file caches."""
+
+    profile_files: Dict[str, str] = None
+    family_files: Dict[str, str] = None
+    default_male: Optional[str] = None
+    default_female: Optional[str] = None
+    default_family: Optional[str] = None
+
+    def initialize(self):
+        """Initialize the image caches."""
+        allowed_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp"}
+
+        self.profile_files = {
+            os.path.splitext(f)[0].lower(): os.path.join(PROFILE_IMAGES_PATH, f)
+            for f in os.listdir(PROFILE_IMAGES_PATH)
+            if os.path.splitext(f)[1].lower() in allowed_extensions
+        }
+
+        self.family_files = {
+            os.path.splitext(f)[0].lower(): os.path.join(FAMILY_IMAGES_PATH, f)
+            for f in os.listdir(FAMILY_IMAGES_PATH)
+            if os.path.splitext(f)[1].lower() in allowed_extensions
+        }
+
+        # Set default images
+        default_male_path = os.path.join(DEFAULT_IMAGES_PATH, "male.jpg")
+        default_female_path = os.path.join(DEFAULT_IMAGES_PATH, "female.jpg")
+        default_family_path = os.path.join(DEFAULT_IMAGES_PATH, "family.jpg")
+
+        self.default_male = (
+            default_male_path if os.path.exists(default_male_path) else None
+        )
+        self.default_female = (
+            default_female_path if os.path.exists(default_female_path) else None
+        )
+        self.default_family = (
+            default_family_path if os.path.exists(default_family_path) else None
+        )
 
 
 def preprocess_config(config: dict) -> dict:
@@ -48,45 +94,51 @@ def preprocess_config(config: dict) -> dict:
     return config
 
 
-def get_image_path(name: str, image_type: str = "profile") -> str:
+def get_image_path(name: str, image_type: str, cache: ImageCache) -> str:
     """
     Retrieve the cached image path for a given name and image type.
     """
     key = name.strip().lower()
     if image_type == "profile":
-        return profile_files.get(key)
-    return family_files.get(key)
+        return cache.profile_files.get(key)
+    return cache.family_files.get(key)
 
 
-def get_default_image(gender: str) -> str:
+def get_default_image(gender: str, cache: ImageCache) -> str:
     """
     Retrieve the default image path for a given gender.
     """
     gender = gender.lower()
-    return (
-        default_male
-        if gender == "male"
-        else default_female if gender == "female" else None
-    )
+    if gender == "male":
+        return cache.default_male
+    elif gender == "female":
+        return cache.default_female
+    return None
 
 
-def get_family_image(member: dict) -> str:
+def get_family_image(member: dict, cache: ImageCache) -> str:
     """
     Retrieve the family photo for a member, if available.
     """
     if member.get("hasFamily") is False:
         return None
-    family_photo = get_image_path(member["name"], "family")
+
+    family_photo = get_image_path(member["name"], "family", cache)
     if family_photo:
         return family_photo
-    return default_family if member.get("hasFamily") and default_family else None
+
+    return (
+        cache.default_family
+        if member.get("hasFamily") and cache.default_family
+        else None
+    )
 
 
-def has_family_photo(member: dict) -> bool:
+def has_family_photo(member: dict, cache: ImageCache) -> bool:
     """
     Check if the member has a family photo.
     """
-    return get_family_image(member) is not None
+    return get_family_image(member, cache) is not None
 
 
 def resize_image(img: Image.Image, max_width: int, max_height: int) -> Image.Image:
@@ -103,8 +155,32 @@ def resize_image(img: Image.Image, max_width: int, max_height: int) -> Image.Ima
     return img.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
 
+def load_image(
+    path: str, default_path: str = None, default_size: Tuple[int, int] = None
+) -> Optional[Image.Image]:
+    """
+    Load an image from the given path, falling back to default if needed.
+    """
+    try:
+        return Image.open(path)
+    except Exception as e:
+        print(f"Error opening image {path}: {e}")
+        if default_path:
+            try:
+                return Image.open(default_path)
+            except Exception as e:
+                print(f"Error opening default image {default_path}: {e}")
+        if default_size:
+            return Image.new("RGB", default_size, "gray")
+    return None
+
+
 def get_tile(
-    node: dict, config: dict, font: ImageFont.FreeTypeFont, label: str = None
+    node: dict,
+    config: dict,
+    font: ImageFont.FreeTypeFont,
+    cache: ImageCache,
+    label: str = None,
 ) -> Image.Image:
     """
     Create a tile for a single person.
@@ -159,20 +235,14 @@ def get_tile(
 
     # Get the profile image
     img = None
-    profile_path = get_image_path(base_name, "profile")
+    profile_path = get_image_path(base_name, "profile", cache)
     if profile_path:
-        try:
-            img = Image.open(profile_path)
-        except Exception as e:
-            print(f"Error opening image {profile_path}: {e}")
+        img = load_image(profile_path)
 
     if not img:
-        default_path = get_default_image(node.get("gender", "male"))
+        default_path = get_default_image(node.get("gender", "male"), cache)
         if default_path:
-            try:
-                img = Image.open(default_path)
-            except Exception as e:
-                print(f"Error opening default image {default_path}: {e}")
+            img = load_image(default_path)
 
     if img:
         # Calculate dimensions to maintain aspect ratio
@@ -234,15 +304,19 @@ def get_tile(
 
 
 def get_member_tile(
-    member: dict, config: dict, font: ImageFont.FreeTypeFont, label: str = None
+    member: dict,
+    config: dict,
+    font: ImageFont.FreeTypeFont,
+    cache: ImageCache,
+    label: str = None,
 ) -> Image.Image:
     """
     Create a combined tile for a member.
     If the member has a spouse, combine their tiles side by side.
     """
     if member.get("spouse"):
-        tile1 = get_tile(member, config, font, label=label)
-        tile2 = get_tile(member["spouse"], config, font, label="Spouse")
+        tile1 = get_tile(member, config, font, cache, label=label)
+        tile2 = get_tile(member["spouse"], config, font, cache, label="Spouse")
         height = max(tile1.height, tile2.height)
         width = tile1.width + SPACER + tile2.width
         combined = Image.new("RGB", (width, height), "white")
@@ -251,7 +325,7 @@ def get_member_tile(
         combined.paste(tile1, (0, y1))
         combined.paste(tile2, (tile1.width + SPACER, y2))
         return combined
-    return get_tile(member, config, font, label=label)
+    return get_tile(member, config, font, cache, label=label)
 
 
 def paste_tiles(canvas: Image.Image, tiles: list, y: int) -> list:
@@ -276,6 +350,7 @@ def draw_person(
     show_spouse: bool,
     config: dict,
     font: ImageFont.FreeTypeFont,
+    cache: ImageCache,
     is_root: bool = False,
     label: str = None,
 ) -> tuple:
@@ -286,8 +361,8 @@ def draw_person(
     if show_spouse and node.get("spouse"):
         main_label = label or node.get("customLabel") or (None if is_root else "Child")
         tiles = [
-            get_tile(node, config, font, label=main_label),
-            get_tile(node["spouse"], config, font, label="Spouse"),
+            get_tile(node, config, font, cache, label=main_label),
+            get_tile(node["spouse"], config, font, cache, label="Spouse"),
         ]
 
         # Draw spouse connection line
@@ -299,11 +374,11 @@ def draw_person(
                 (positions[0][0] + positions[0][2] + LINE_MARGIN, spouse_line_y),
                 (positions[1][0] - LINE_MARGIN, spouse_line_y),
             ],
-            fill="#D3D3D3",  # Light grey color
-            width=8,  # Thicker lines
+            fill=LINE_COLOR,
+            width=LINE_WIDTH,
         )
     else:
-        tiles = [get_tile(node, config, font, label=label)]
+        tiles = [get_tile(node, config, font, cache, label=label)]
         positions = paste_tiles(canvas, tiles, y)
 
     left = positions[0][0]
@@ -320,6 +395,7 @@ def draw_ancestors(
     level_height: int,
     config: dict,
     font: ImageFont.FreeTypeFont,
+    cache: ImageCache,
 ) -> None:
     """
     Draw ancestors on the canvas.
@@ -333,6 +409,7 @@ def draw_ancestors(
             True,
             config,
             font,
+            cache,
             is_root,
             label=lbl,
         )
@@ -354,6 +431,7 @@ def create_focused_slideshow(
     slides_folder: str,
     font: ImageFont.FreeTypeFont,
     label_font: ImageFont.FreeTypeFont,
+    cache: ImageCache,
 ) -> list:
     """
     Create a slideshow focusing on family members and their relationships.
@@ -364,19 +442,23 @@ def create_focused_slideshow(
 
     print("Generating slide 0: Root only")
     canvas = Image.new("RGB", (CANVAS_WIDTH, CANVAS_HEIGHT), "white")
-    draw_person(canvas, root, HEADER_Y, True, config, font, is_root=True)
+    draw_person(canvas, root, HEADER_Y, True, config, font, cache, is_root=True)
     slide_path = os.path.join(slides_folder, "slide_focused_0.jpg")
     canvas.save(slide_path)
     slide_files.append(slide_path)
 
     print("Generating slide 1: Root with children")
     canvas = Image.new("RGB", (CANVAS_WIDTH, CANVAS_HEIGHT), "white")
-    draw_person(canvas, root, HEADER_Y, True, config, font, is_root=True)
+    draw_person(canvas, root, HEADER_Y, True, config, font, cache, is_root=True)
     children = root.get("children", [])
     if children:
         child_tiles = [
             get_tile(
-                child, config, font, label=child.get("customLabel", f"Child {i+1}")
+                child,
+                config,
+                font,
+                cache,
+                label=child.get("customLabel", f"Child {i+1}"),
             )
             for i, child in enumerate(children)
         ]
@@ -393,7 +475,9 @@ def create_focused_slideshow(
         nonlocal slide_files
         print(f"Generating base slide {slide_index} for {focus_node['name']}")
         base_canvas = Image.new("RGB", (CANVAS_WIDTH, CANVAS_HEIGHT), "white")
-        draw_ancestors(base_canvas, ancestors, HEADER_Y, LEVEL_HEIGHT, config, font)
+        draw_ancestors(
+            base_canvas, ancestors, HEADER_Y, LEVEL_HEIGHT, config, font, cache
+        )
         parent_conn = draw_person(
             base_canvas,
             focus_node,
@@ -401,6 +485,7 @@ def create_focused_slideshow(
             True,
             config,
             font,
+            cache,
             label=label,
         )
         slide_path = os.path.join(slides_folder, f"slide_focused_{slide_index}.jpg")
@@ -415,7 +500,7 @@ def create_focused_slideshow(
             )
             group_canvas = Image.new("RGB", (CANVAS_WIDTH, CANVAS_HEIGHT), "white")
             draw_ancestors(
-                group_canvas, ancestors, HEADER_Y, LEVEL_HEIGHT, config, font
+                group_canvas, ancestors, HEADER_Y, LEVEL_HEIGHT, config, font, cache
             )
             parent_conn = draw_person(
                 group_canvas,
@@ -424,12 +509,17 @@ def create_focused_slideshow(
                 True,
                 config,
                 font,
+                cache,
                 label=label,
             )
             paste_y = HEADER_Y + (len(ancestors) + 1) * LEVEL_HEIGHT
             child_tiles = [
                 get_tile(
-                    child, config, font, label=child.get("customLabel", f"Child {i+1}")
+                    child,
+                    config,
+                    font,
+                    cache,
+                    label=child.get("customLabel", f"Child {i+1}"),
                 )
                 for i, child in enumerate(children)
             ]
@@ -439,22 +529,22 @@ def create_focused_slideshow(
             horiz_y = paste_y - LINE_MARGIN
             draw_group.line(
                 [parent_conn, (parent_conn[0], horiz_y)],
-                fill="#D3D3D3",  # Light grey color
-                width=8,  # Thicker lines
+                fill=LINE_COLOR,
+                width=LINE_WIDTH,
             )
             child_mid_points = [(x + w // 2, y) for (x, y, w, h) in child_positions]
             for cm in child_mid_points:
                 draw_group.line(
                     [cm, (cm[0], horiz_y)],
-                    fill="#D3D3D3",  # Light grey color
-                    width=8,  # Thicker lines
+                    fill=LINE_COLOR,
+                    width=LINE_WIDTH,
                 )
             left_line = min(cm[0] for cm in child_mid_points)
             right_line = max(cm[0] for cm in child_mid_points)
             draw_group.line(
                 [(left_line, horiz_y), (right_line, horiz_y)],
-                fill="#D3D3D3",  # Light grey color
-                width=8,  # Thicker lines
+                fill=LINE_COLOR,
+                width=LINE_WIDTH,
             )
 
             slide_path = os.path.join(slides_folder, f"slide_focused_{slide_index}.jpg")
@@ -465,7 +555,7 @@ def create_focused_slideshow(
             new_ancestors = ancestors + [(focus_node, label)]
             for i, child in enumerate(children):
                 child_label = child.get("customLabel", f"Child {i+1}")
-                if has_family_photo(child):
+                if has_family_photo(child, cache):
                     print(f"Generating family slide {slide_index} for {child['name']}")
                     family_canvas = Image.new(
                         "RGB", (CANVAS_WIDTH, CANVAS_HEIGHT), "white"
@@ -477,44 +567,42 @@ def create_focused_slideshow(
                         LEVEL_HEIGHT,
                         config,
                         font,
+                        cache,
                     )
-                    family_photo_path = get_family_image(child)
-                    try:
-                        group_img = Image.open(family_photo_path)
+                    family_photo_path = get_family_image(child, cache)
+                    group_img = load_image(
+                        family_photo_path,
+                        default_size=(GROUP_PIC_MAX_WIDTH, GROUP_PIC_MAX_HEIGHT),
+                    )
+
+                    if group_img:
                         group_img = resize_image(
                             group_img, GROUP_PIC_MAX_WIDTH, GROUP_PIC_MAX_HEIGHT
                         )
-                    except Exception as e:
-                        print(f"Error opening family photo {family_photo_path}: {e}")
-                        group_img = Image.new(
-                            "RGB", (GROUP_PIC_MAX_WIDTH, GROUP_PIC_MAX_HEIGHT), "gray"
-                        )
-                    x = (CANVAS_WIDTH - group_img.width) // 2
-                    y_group = HEADER_Y + len(new_ancestors) * LEVEL_HEIGHT
-                    family_canvas.paste(group_img, (x, y_group))
-                    draw_obj = ImageDraw.Draw(family_canvas)
-                    y_text = y_group + group_img.height + LINE_SPACING
-                    line1 = (
-                        f"{child['name']} ({child.get('customLabel', f'Child {i+1}')})"
-                    )
-                    if child.get("spouse", {}).get("name"):
-                        line1 += f", {child['spouse']['name']} (Spouse)"
-                    draw_centered_text(draw_obj, y_text, line1, label_font)
-                    y_text += LABEL_FONT_SIZE + LINE_SPACING
-                    if child.get("children"):
-                        child_labels = [
-                            f"{c['name']} (Child {j+1})"
-                            for j, c in enumerate(child["children"])
-                        ]
-                        line2 = ", ".join(child_labels)
-                        draw_centered_text(draw_obj, y_text, line2, label_font)
+                        x = (CANVAS_WIDTH - group_img.width) // 2
+                        y_group = HEADER_Y + len(new_ancestors) * LEVEL_HEIGHT
+                        family_canvas.paste(group_img, (x, y_group))
+                        draw_obj = ImageDraw.Draw(family_canvas)
+                        y_text = y_group + group_img.height + LINE_SPACING
+                        line1 = f"{child['name']} ({child.get('customLabel', f'Child {i+1}')})"
+                        if child.get("spouse", {}).get("name"):
+                            line1 += f", {child['spouse']['name']} (Spouse)"
+                        draw_centered_text(draw_obj, y_text, line1, label_font)
                         y_text += LABEL_FONT_SIZE + LINE_SPACING
-                    slide_path = os.path.join(
-                        slides_folder, f"slide_focused_{slide_index}.jpg"
-                    )
-                    family_canvas.save(slide_path)
-                    slide_files.append(slide_path)
-                    slide_index += 1
+                        if child.get("children"):
+                            child_labels = [
+                                f"{c['name']} (Child {j+1})"
+                                for j, c in enumerate(child["children"])
+                            ]
+                            line2 = ", ".join(child_labels)
+                            draw_centered_text(draw_obj, y_text, line2, label_font)
+                            y_text += LABEL_FONT_SIZE + LINE_SPACING
+                        slide_path = os.path.join(
+                            slides_folder, f"slide_focused_{slide_index}.jpg"
+                        )
+                        family_canvas.save(slide_path)
+                        slide_files.append(slide_path)
+                        slide_index += 1
                 else:
                     slide_index = recursive_focus(
                         ancestors + [(focus_node, label)],
@@ -533,12 +621,14 @@ def create_focused_slideshow(
     return slide_files
 
 
-def compute_subtree(node: dict, config: dict, font: ImageFont.FreeTypeFont) -> dict:
+def compute_subtree(
+    node: dict, config: dict, font: ImageFont.FreeTypeFont, cache: ImageCache
+) -> dict:
     """
     Recursively compute the subtree dimensions and pre-render the node tile.
     Returns a dict with keys: tile, width, height, children, and family_img.
     """
-    tile = get_member_tile(node, config, font)
+    tile = get_member_tile(node, config, font, cache)
     tile_width, tile_height = tile.size
     children_subtrees = []
 
@@ -549,7 +639,7 @@ def compute_subtree(node: dict, config: dict, font: ImageFont.FreeTypeFont) -> d
     # Process children
     if node.get("children"):
         for child in node["children"]:
-            child_tree = compute_subtree(child, config, font)
+            child_tree = compute_subtree(child, config, font, cache)
             children_subtrees.append(child_tree)
 
         # Calculate total width needed for children
@@ -565,19 +655,17 @@ def compute_subtree(node: dict, config: dict, font: ImageFont.FreeTypeFont) -> d
 
     # Handle family photo if exists
     family_img = None
-    if has_family_photo(node):
-        family_photo_path = get_family_image(node)
-        try:
-            family_img = Image.open(family_photo_path)
+    if has_family_photo(node, cache):
+        family_photo_path = get_family_image(node, cache)
+        family_img = load_image(family_photo_path)
+
+        if family_img:
             family_img = resize_image(
                 family_img, GROUP_PIC_MAX_WIDTH, GROUP_PIC_MAX_HEIGHT
             )
             # Add height for family image with spacing
-            if family_img:
-                total_height += V_SPACER + family_img.height
-                total_width = max(total_width, family_img.width)
-        except Exception as e:
-            print(f"Error opening family photo {family_photo_path}: {e}")
+            total_height += V_SPACER + family_img.height
+            total_width = max(total_width, family_img.width)
 
     return {
         "tile": tile,
@@ -594,10 +682,6 @@ def draw_subtree(canvas: Image.Image, subtree: dict, x: int, y: int) -> tuple:
     Recursively draw the subtree on the canvas.
     Returns the center point of the current node for line connections.
     """
-    # Define line properties to match the image
-    LINE_COLOR = "#D3D3D3"  # Light grey color
-    LINE_WIDTH = 8  # Thicker lines
-
     tile = subtree["tile"]
     tile_width = subtree["original_width"]
     tile_height = tile.size[1]
@@ -743,19 +827,34 @@ def draw_subtree(canvas: Image.Image, subtree: dict, x: int, y: int) -> tuple:
 
 
 def create_complete_tree(
-    config: dict, font: ImageFont.FreeTypeFont, label_font: ImageFont.FreeTypeFont
+    config: dict,
+    font: ImageFont.FreeTypeFont,
+    label_font: ImageFont.FreeTypeFont,
+    cache: ImageCache,
 ) -> None:
     """
     Create a dynamically sized complete family tree image.
     """
     root = config["root"][0]
-    subtree = compute_subtree(root, config, font)
+    subtree = compute_subtree(root, config, font, cache)
     padding = 50
     canvas_width = subtree["width"] + 2 * padding
     canvas_height = subtree["height"] + 2 * padding
     canvas = Image.new("RGB", (canvas_width, canvas_height), "white")
     draw_subtree(canvas, subtree, padding, padding)
     canvas.save(TREE_IMAGE_PATH)
+
+
+def load_fonts() -> Tuple[ImageFont.FreeTypeFont, ImageFont.FreeTypeFont]:
+    """Load and return the required fonts."""
+    try:
+        font = ImageFont.truetype("arial.ttf", 18)
+        label_font = ImageFont.truetype("arial.ttf", LABEL_FONT_SIZE)
+    except IOError:
+        print("Arial font not found, using default font")
+        font = ImageFont.load_default()
+        label_font = font
+    return font, label_font
 
 
 def main() -> None:
@@ -777,42 +876,20 @@ def main() -> None:
 
     config = preprocess_config(config)
 
-    global profile_files, family_files
-    allowed_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp"}
-    profile_files = {
-        os.path.splitext(f)[0].lower(): os.path.join(PROFILE_IMAGES_PATH, f)
-        for f in os.listdir(PROFILE_IMAGES_PATH)
-        if os.path.splitext(f)[1].lower() in allowed_extensions
-    }
-    family_files = {
-        os.path.splitext(f)[0].lower(): os.path.join(FAMILY_IMAGES_PATH, f)
-        for f in os.listdir(FAMILY_IMAGES_PATH)
-        if os.path.splitext(f)[1].lower() in allowed_extensions
-    }
+    # Initialize image cache
+    cache = ImageCache()
+    cache.initialize()
 
-    try:
-        font = ImageFont.truetype("arial.ttf", 18)
-        label_font = ImageFont.truetype("arial.ttf", LABEL_FONT_SIZE)
-    except IOError:
-        font = ImageFont.load_default()
-        label_font = font
-
-    global default_male, default_female, default_family
-    default_male = os.path.join(DEFAULT_IMAGES_PATH, "male.jpg")
-    default_female = os.path.join(DEFAULT_IMAGES_PATH, "female.jpg")
-    default_family = os.path.join(DEFAULT_IMAGES_PATH, "family.jpg")
-    if not os.path.exists(default_male):
-        default_male = None
-    if not os.path.exists(default_female):
-        default_female = None
-    if not os.path.exists(default_family):
-        default_family = None
+    # Load fonts
+    font, label_font = load_fonts()
 
     # Generate the video slides
-    slide_files = create_focused_slideshow(config, slides_folder, font, label_font)
+    slide_files = create_focused_slideshow(
+        config, slides_folder, font, label_font, cache
+    )
 
     # Generate the complete tree image
-    create_complete_tree(config, font, label_font)
+    create_complete_tree(config, font, label_font, cache)
 
     # Create the video
     clip = ImageSequenceClip(slide_files, fps=1 / 5)
