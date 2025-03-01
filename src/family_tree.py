@@ -25,6 +25,8 @@ H_SPACER = 30
 V_SPACER = 50
 LINE_COLOR = "#D3D3D3"
 LINE_WIDTH = 8
+MALE_COLOR = "#4682B4"
+FEMALE_COLOR = "#DB7093"
 
 # Image paths
 PROFILE_IMAGES_PATH = "assets/images/profiles"
@@ -140,8 +142,11 @@ def get_tile(node: dict, font: ImageFont.FreeTypeFont, cache: ImageCache, label:
     shadow_offset = 4
     border_padding = 10
     corner_radius = 10
+    border_width = 3  # Width of gender-specific border
     base_name = node["name"]
     display_name = f"{base_name} ({label})" if label else base_name
+    gender = node.get("gender", "male").lower()
+    gender_color = MALE_COLOR if gender == "male" else FEMALE_COLOR
 
     # Measure text width
     temp_img = Image.new("RGB", (1, 1))
@@ -163,7 +168,11 @@ def get_tile(node: dict, font: ImageFont.FreeTypeFont, cache: ImageCache, label:
     # Create main tile
     tile = Image.new("RGBA", (tile_width, tile_height), (0, 0, 0, 0))
     tile_draw = ImageDraw.Draw(tile)
-    tile_draw.rounded_rectangle([(0, 0), (tile_width - 1, tile_height - 1)], fill="white", outline="#E8E8E8", radius=corner_radius, width=1)
+    
+    # Draw gender-specific border
+    tile_draw.rounded_rectangle([(0, 0), (tile_width - 1, tile_height - 1)], 
+                               fill="white", outline=gender_color, 
+                               radius=corner_radius, width=border_width)
 
     # Load profile image
     profile_path = get_image_path(base_name, "profile", cache)
